@@ -9,6 +9,7 @@ package
    import flash.text.*;
    import flash.utils.*;
    import Shared.GlobalFunc;
+   import scaleform.gfx.*;
   
 
 	/**
@@ -21,22 +22,26 @@ package
 	
 	public class HUDEditor extends MovieClip 
 	{
-		[Embed(source = "hudmenu.swf", symbol = "HUDMessageItemBox")]
+		[Embed(source = "hudmenu2.swf", symbol = "HUDMessageItemBox")]
 		private var HUDMessageItemBox:Class;
 		
-		
+		[Embed(source="hudmenu2.swf", symbol="FlashLightWidget")]
+		private var FlashLightWidget:Class;
 		
 		private const PercentMax:Number = 1.0;
 		
 		private var topLevel:* = null;
 		private var xmlConfigHC:XML;
 		private var xmlLoaderHC:URLLoader;
+		private var textURL:URLRequest;
+		private var textLoader:URLLoader;
 		private var updateTimerHC:Timer;
 
 		private var debugTextHC:TextField;
 		private var watermark:TextField;
 		private var thirst:TextField;
 		private var hunger:TextField;
+		private var showHealthText:TextField;
 		
 		private var rightmetersBrightness:Number = 0;
 		private var rightmetersContrast:Number = 0;
@@ -181,6 +186,8 @@ package
 		public var LevelUpAnimPos:Point = new Point ();
 		public var RepUpdatesScale:Number = 1;
 		public var RepUpdatesPos:Point = new Point ();
+		public var HitMarkerScale:Number = 1;
+		public var HitMarkerPos:Point = new Point ();
 		
 		public var TeamPanelPosPA:Point = new Point ();
 		public var HungerMeterPosPA:Point = new Point ();
@@ -246,6 +253,8 @@ package
 		private var oLevelUpAnimPos:Point = new Point();
 		private var oRepUpdatesPos:Point = new Point();
 		private var VisibilityChanged:int = 0;
+		private var oHitMarkerPos:Point = new Point();
+		private var iniLoader:URLLoader;
 		
 		private var _CharInfo:Object;
 		
@@ -259,9 +268,10 @@ package
 		
 		private const maxScale:Number = 1.5;
 		
-		private var HUDNotification_mc:Object = new HUDEditor_HUDMessageItemBox;
-		private var XPMeterTest:Object = new HUDEditor_HUDMessageItemBox;
+		private var HUDNotification_mc:Object = new HUDMessageItemBox;
+		private var FlashLightRestored_mc:Object = new FlashLightWidget;
 		private var EventCloseTimer:Timer;
+		private var reloadCountNukeCodes:Number = 0;
 		
 		public function HUDEditor() 
 		{
@@ -281,6 +291,8 @@ package
 			topLevel = stage.getChildAt(0);
 			if(topLevel != null && getQualifiedClassName(topLevel) == "HUDMenu")
 			{
+				this.initShowHealthText();
+				
 				oLeftMeterPos.x = topLevel.LeftMeters_mc.x;
 				oLeftMeterPos.y = topLevel.LeftMeters_mc.y;
 				
@@ -323,8 +335,8 @@ package
 				oNotificationPos.x = topLevel.HUDNotificationsGroup_mc.Messages_mc.x;
 				oNotificationPos.y = topLevel.HUDNotificationsGroup_mc.Messages_mc.y;
 
-				oQuestPos.x = topLevel.TopRightGroup_mc.QuestTracker.x;
-				oQuestPos.y = topLevel.TopRightGroup_mc.QuestTracker.y;
+				oQuestPos.x = topLevel.TopRightGroup_mc.NewQuestTracker_mc.x;
+				oQuestPos.y = topLevel.TopRightGroup_mc.NewQuestTracker_mc.y;
 
 				oSneakPos.x = topLevel.TopCenterGroup_mc.StealthMeter_mc.x;
 				oSneakPos.y = topLevel.TopCenterGroup_mc.StealthMeter_mc.y;
@@ -359,11 +371,15 @@ package
 				oEnemyHealthPos.x = topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.x;
 				oEnemyHealthPos.y = topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.y;
 				
+				oHitMarkerPos.x = topLevel.CenterGroup_mc.HitIndicator_mc.x;
+				oHitMarkerPos.y = topLevel.CenterGroup_mc.HitIndicator_mc.y;
+				
 				topLevel.RightMeters_mc.HUDThirstMeter_mc.addChild(thirst);
 				topLevel.RightMeters_mc.HUDHungerMeter_mc.addChild(hunger);
 				
 				topLevel.HUDNotificationsGroup_mc.Messages_mc.addChild(HUDNotification_mc);
-				//topLevel.ReputationUpdates_mc.addChild(XPMeterTest);
+				topLevel.RightMeters_mc.FlashLightWidget_mc.addChild(FlashLightRestored_mc);
+				topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.addChild(showHealthText);
 				
 				HUDNotification_mc.y += 150;
 				HUDNotification_mc.addFrameScript(0, frame1, 5, frame2, 15, frame3, 16, frame3, 170, frame4);
@@ -415,6 +431,23 @@ package
 			debugTextHC.visible = true;
 		}
 		
+		private function initShowHealthText():void
+		{
+			var showHealthTextShadow:DropShadowFilter = new DropShadowFilter(2, 45, 0, 1, 0, 0, 1, 1);
+			showHealthText = new TextField();
+			showHealthText.setTextFormat(topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.DisplayText_mc.DisplayText_tf.getTextFormat());
+			showHealthText.defaultTextFormat = topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.DisplayText_mc.DisplayText_tf.getTextFormat();
+			showHealthText.width = 1920;
+			showHealthText.height = 1080;
+			showHealthText.name = "showHealthText";
+			showHealthText.filters = [showHealthTextShadow];
+			showHealthText.visible = true;
+			showHealthText.text = "HEALTH TEXT ERROR";
+			TextFieldEx.setTextAutoSize(showHealthText, TextFieldEx.TEXTAUTOSZ_SHRINK);
+			showHealthText.autoSize = TextFieldAutoSize.CENTER;
+			showHealthText.embedFonts = true;
+			showHealthText.mouseEnabled = false;
+		}
 		
 		private function initWatermarkText():void
 		{
@@ -485,8 +518,49 @@ package
 			_CharInfo = _arg1.data;
 		}
 		
-		private function update(event:TimerEvent):void
+		private function findChildrenOf(mc:MovieClip):Array
 		{
+			var children:Array = new Array();
+			for (var i:int = 0; i < mc.numChildren; i++)
+			{
+				children.push(mc.getChildAt(i));
+			}
+			return children;
+		}
+
+
+		
+		private function update(event:TimerEvent):void
+		{/*
+			debugTextHC.text = "";
+			
+		   displayText("TopRightGroup_mc");
+		   for (var debugi:int = 0; debugi < topLevel.TopRightGroup_mc.numChildren; debugi++ )
+		   {
+			   var child:DisplayObject = topLevel.TopRightGroup_mc.getChildAt(debugi);
+			   displayText(debugi.toString() + " - " + child.name);
+			   for (var debugii:int = 0; debugii < topLevel.TopRightGroup_mc.getChildAt(debugi).numChildren; debugii++ )
+			   {
+				   var child2:DisplayObject = topLevel.TopRightGroup_mc.getChildAt(debugi).getChildAt(debugii);
+				   displayText("-  " + debugii.toString() + " - " + child2.name);
+				   for (var debugiii:int = 0; debugiii < topLevel.TopRightGroup_mc.getChildAt(debugi).getChildAt(debugii).numChildren; debugiii++ )
+				   {
+						var child3:DisplayObject = topLevel.TopRightGroup_mc.getChildAt(debugi).getChildAt(debugii).getChildAt(debugiii);
+						displayText("- -  " + debugiii.toString() + " - " + child3.name);
+						for (var debugiiii:int = 0; debugiiii < topLevel.TopRightGroup_mc.getChildAt(debugi).getChildAt(debugii).getChildAt(debugiii).numChildren; debugiiii++ )
+					   {
+							var child4:DisplayObject = topLevel.TopRightGroup_mc.getChildAt(debugi).getChildAt(debugii).getChildAt(debugiii).getChildAt(debugiiii);
+							displayText("- - -  " + debugiiii.toString() + " - " + child4.name);
+							for (var debugiiiii:int = 0; debugiiiii < topLevel.TopRightGroup_mc.getChildAt(debugi).getChildAt(debugii).getChildAt(debugiii).getChildAt(debugiiii).numChildren; debugiiiii++ )
+						   {
+								var child5:DisplayObject = topLevel.TopRightGroup_mc.getChildAt(debugi).getChildAt(debugii).getChildAt(debugiii).getChildAt(debugiiii).getChildAt(debugiiiii);
+								displayText("- - - -  " + debugiiiii.toString() + " - " + child5.name);
+						   }
+					   }
+				   }
+			   }
+		   }
+			*/
 			/*
 			debugTextHC.text = "";
 			displayText("DEBUG MODE");
@@ -510,6 +584,37 @@ package
 			*/
 			
 			//topLevel.LevelUpAnimation_mc.gotoAndStop(80);
+			
+				if (xmlConfigHC.Elements.LeftMeter.ShowHPLabel == "false")
+					topLevel.LeftMeters_mc.HPMeter_mc.DisplayText_mc.DisplayText_tf.text = "";
+				else if (xmlConfigHC.Elements.LeftMeter.ShowHPLabel == "true")
+					topLevel.LeftMeters_mc.HPMeter_mc.DisplayText_mc.DisplayText_tf.text = "HP";
+					
+				if (xmlConfigHC.Elements.RightMeter.Parts.APMeter.ShowAPLabel == "false")
+					topLevel.RightMeters_mc.ActionPointMeter_mc.DisplayText_mc.DisplayText_tf.text = "";
+				else if (xmlConfigHC.Elements.RightMeter.Parts.APMeter.ShowAPLabel == "true")
+					topLevel.RightMeters_mc.ActionPointMeter_mc.DisplayText_mc.DisplayText_tf.text = "AP";
+					
+				if (xmlConfigHC.Elements.LeftMeter.ShowBarBG == "false")
+					topLevel.LeftMeters_mc.HPMeter_mc.getChildAt(0).visible = false;
+				else if (xmlConfigHC.Elements.LeftMeter.ShowBarBG == "true")
+					topLevel.LeftMeters_mc.HPMeter_mc.getChildAt(0).visible = true;
+					
+				if (xmlConfigHC.Elements.RightMeter.Parts.APMeter.ShowBarBG == "false")
+					topLevel.RightMeters_mc.ActionPointMeter_mc.APBarFrame_mc.visible = false;
+				else if (xmlConfigHC.Elements.RightMeter.Parts.APMeter.ShowBarBG == "true")
+					topLevel.RightMeters_mc.ActionPointMeter_mc.APBarFrame_mc.visible = true;
+					
+				if (xmlConfigHC.Elements.LeftMeter.HPLabelSide == "left")
+					topLevel.LeftMeters_mc.HPMeter_mc.DisplayText_mc.x = -45;
+				else if (xmlConfigHC.Elements.LeftMeter.HPLabelSide == "right")
+					topLevel.LeftMeters_mc.HPMeter_mc.DisplayText_mc.x = 325;
+					
+				if (xmlConfigHC.Elements.RightMeter.Parts.APMeter.APLabelSide == "left")
+					topLevel.RightMeters_mc.ActionPointMeter_mc.DisplayText_mc.x = -321;
+				else if (xmlConfigHC.Elements.RightMeter.Parts.APMeter.APLabelSide == "right")
+					topLevel.RightMeters_mc.ActionPointMeter_mc.DisplayText_mc.x = 43;
+			
 			if (xmlConfigHC.dbg.e != undefined && xmlConfigHC.dbg.e == "191x7")
 			{
 				debugTextHC.text = "";
@@ -517,10 +622,11 @@ package
 				displayText("----------");
 				displayText("reloadCount: " + reloadCount.toString());
 				displayText("----------");
-				topLevel.HUDNotificationsGroup_mc.XPMeter_mc.alpha = 1;
-				topLevel.LevelUpAnimation_mc.gotoAndStop("80");
 			}
 			topLevel.BottomCenterGroup_mc.CompassWidget_mc.filters = [bccompassColorMatrix];
+			
+			this.ShowHealth(0);
+			
 			if (xmlConfigHC.Colors.HUD.TZMapMarkers == "true")
 			{
 				topLevel.BottomCenterGroup_mc.CompassWidget_mc.QuestMarkerHolder_mc.filters = [bccompassInvColorMatrix];
@@ -973,6 +1079,9 @@ package
 				topLevel.ReputationUpdates_mc.x = (oRepUpdatesPos.x + RepUpdatesPos.x);
 				topLevel.ReputationUpdates_mc.y = (oRepUpdatesPos.y + RepUpdatesPos.y);
 				
+				topLevel.CenterGroup_mc.HitIndicator_mc.x = (oHitMarkerPos.x + HitMarkerPos.x);
+				topLevel.CenterGroup_mc.HitIndicator_mc.y = (oHitMarkerPos.y + HitMarkerPos.y);
+				
 				//QuickLoot
 				var tfTemp:* = topLevel.CenterGroup_mc.QuickContainerWidget_mc.ListHeaderAndBracket_mc.ContainerName_mc.textField_tf.getTextFormat();
 				if (tfTemp.align == "left")
@@ -1008,8 +1117,8 @@ package
 				topLevel.HUDNotificationsGroup_mc.CurrencyUpdates_mc.y = (oCurrencyPos.y + CurrencyPos.y);
 				
 				//topRightQuest
-				topLevel.TopRightGroup_mc.QuestTracker.x = (oQuestPos.x + QuestPos.x);
-				topLevel.TopRightGroup_mc.QuestTracker.y = (oQuestPos.y + QuestPos.y);
+				topLevel.TopRightGroup_mc.NewQuestTracker_mc.x = (oQuestPos.x + QuestPos.x);
+				topLevel.TopRightGroup_mc.NewQuestTracker_mc.y = (oQuestPos.y + QuestPos.y);
 				
 				//Fusion Core Meter (part of HUDRightMeters for some ungodly reason)
 				topLevel.RightMeters_mc.HUDFusionCoreMeter_mc.x = (oFusionPos.x + FusionPos.x);
@@ -1040,11 +1149,11 @@ package
 					watermark.visible = true;
 					CONFIG::debug
 					{
-						watermark.text = "HUDEditor v2.4.1pre EDIT MODE";
+						watermark.text = "HUDEditor ***BETA*** EDIT MODE";
 					}
 					CONFIG::release
 					{
-						watermark.text = "HUDEditor v2.4.1 EDIT MODE";
+						watermark.text = "HUDEditor v2.6.1.5 EDIT MODE";
 					}
 				}
 				else if (xmlConfigHC.Colors.HUD.EditMode == "false")
@@ -1052,7 +1161,7 @@ package
 					CONFIG::debug
 					{
 						watermark.visible = true;
-						watermark.text = "HUDEditor v2.4.1pre TEST BUILD";
+						watermark.text = "HUDEditor ***BETA*** TEST BUILD";
 						watermark.alpha = 0.30;
 						reloadCount = 0;
 					}
@@ -1262,6 +1371,10 @@ package
 				AnnounceScale = xmlConfigHC.Elements.Announce.Scale;
 				AnnouncePos.x = xmlConfigHC.Elements.Announce.X;
 				AnnouncePos.y = xmlConfigHC.Elements.Announce.Y;
+				
+				HitMarkerScale = xmlConfigHC.Elements.HitMarker.Scale;
+				HitMarkerPos.x = xmlConfigHC.Elements.HitMarker.X;
+				HitMarkerPos.y = xmlConfigHC.Elements.HitMarker.Y;
 				
 				//Compass
 				CompassScale = xmlConfigHC.Elements.Compass.Scale;
@@ -1551,7 +1664,16 @@ package
 					topLevel.ReputationUpdates_mc.scaleX = 1;
 					topLevel.ReputationUpdates_mc.scaleY = 1;
 				}
-				
+				if (HitMarkerScale <= maxScale)
+				{
+					topLevel.CenterGroup_mc.HitIndicator_mc.scaleX = HitMarkerScale;
+					topLevel.CenterGroup_mc.HitIndicator_mc.scaleY = HitMarkerScale;
+				}
+				else
+				{
+					topLevel.CenterGroup_mc.HitIndicator_mc.scaleX = 1;
+					topLevel.CenterGroup_mc.HitIndicator_mc.scaleY = 1;
+				}
 				if (FlashLightWidgetScale <= maxScale)
 				{
 					topLevel.RightMeters_mc.FlashLightWidget_mc.scaleX = FlashLightWidgetScale;
@@ -1717,13 +1839,13 @@ package
 
 				if (QuestScale <= maxScale)
 				{
-					topLevel.TopRightGroup_mc.QuestTracker.scaleX = QuestScale;
-					topLevel.TopRightGroup_mc.QuestTracker.scaleY = QuestScale;
+					topLevel.TopRightGroup_mc.NewQuestTracker_mc.scaleX = QuestScale;
+					topLevel.TopRightGroup_mc.NewQuestTracker_mc.scaleY = QuestScale;
 				}
 				else
 				{
-					topLevel.TopRightGroup_mc.QuestTracker.scaleX = 1;
-					topLevel.TopRightGroup_mc.QuestTracker.scaleY = 1;
+					topLevel.TopRightGroup_mc.NewQuestTracker_mc.scaleX = 1;
+					topLevel.TopRightGroup_mc.NewQuestTracker_mc.scaleY = 1;
 				}
 				
 				if (AnnounceScale <= maxScale)
@@ -1738,6 +1860,41 @@ package
 				}
 
 			}
+			
+			if (xmlConfigHC.Elements.EnemyHealthMeter.HealthPercentLocation != undefined)
+			{
+				if (xmlConfigHC.Elements.EnemyHealthMeter.HealthPercentLocation == "top")
+				{
+					showHealthText.y = topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.DisplayText_mc.y - topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.DisplayText_mc.height;
+					showHealthText.autoSize = TextFieldAutoSize.CENTER;
+					showHealthText.x = 0 - showHealthText.width * 0.5;
+				}
+				else if (xmlConfigHC.Elements.EnemyHealthMeter.HealthPercentLocation == "bottom")
+				{
+					showHealthText.y = topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.DisplayText_mc.y + topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.DisplayText_mc.height + 40;
+					showHealthText.autoSize = TextFieldAutoSize.CENTER;
+					showHealthText.x = 0 - showHealthText.width * 0.5;
+				}
+				else if (xmlConfigHC.Elements.EnemyHealthMeter.HealthPercentLocation == "right")
+				{
+					showHealthText.y = topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.DisplayText_mc.y + showHealthText.height - topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.MeterBar_mc.height / 2;
+					showHealthText.autoSize = TextFieldAutoSize.LEFT;
+					showHealthText.x = topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.DisplayText_mc.x + topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.width / 4 + 75;
+				}
+				else if (xmlConfigHC.Elements.EnemyHealthMeter.HealthPercentLocation == "left")
+				{
+					showHealthText.y = topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.DisplayText_mc.y + showHealthText.height - topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.MeterBar_mc.height / 2;
+					showHealthText.autoSize = TextFieldAutoSize.RIGHT;
+					showHealthText.x = topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.DisplayText_mc.x - topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.width / 2;
+				}
+				else
+				{
+					showHealthText.y = topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.DisplayText_mc.y - topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.DisplayText_mc.height;
+					showHealthText.autoSize = TextFieldAutoSize.CENTER;
+					showHealthText.x = 0 - showHealthText.width * 0.5;
+				}
+			}
+			
 			if (xmlConfigHC.Colors.HUD.EnableRecoloring == "true")
 			{
 				topLevel.TopCenterGroup_mc.filters = [topcenterColorMatrix];
@@ -1781,37 +1938,17 @@ package
 				
 				//CenterGroup > QuickContainer, HUDCrosshair, RolloverWidget
 				topLevel.CenterGroup_mc.getChildAt(0).filters = [centerColorMatrix];
-				
-				
-				if (xmlConfigHC.Elements.LeftMeter.ShowHPLabel == "false")
-					topLevel.LeftMeters_mc.HPMeter_mc.DisplayText_mc.DisplayText_tf.text = "";
-				else if (xmlConfigHC.Elements.LeftMeter.ShowHPLabel == "true")
-					topLevel.LeftMeters_mc.HPMeter_mc.DisplayText_mc.DisplayText_tf.text = "HP";
-					
-				if (xmlConfigHC.Elements.RightMeter.Parts.APMeter.ShowAPLabel == "false")
-					topLevel.RightMeters_mc.ActionPointMeter_mc.DisplayText_mc.DisplayText_tf.text = "";
-				else if (xmlConfigHC.Elements.RightMeter.Parts.APMeter.ShowAPLabel == "true")
-					topLevel.RightMeters_mc.ActionPointMeter_mc.DisplayText_mc.DisplayText_tf.text = "AP";
-					
-				if (xmlConfigHC.Elements.LeftMeter.ShowBarBG == "false")
-					topLevel.LeftMeters_mc.HPMeter_mc.getChildAt(0).visible = false;
-				else if (xmlConfigHC.Elements.LeftMeter.ShowBarBG == "true")
-					topLevel.LeftMeters_mc.HPMeter_mc.getChildAt(0).visible = true;
-					
-				if (xmlConfigHC.Elements.RightMeter.Parts.APMeter.ShowBarBG == "false")
-					topLevel.RightMeters_mc.ActionPointMeter_mc.APBarFrame_mc.visible = false;
-				else if (xmlConfigHC.Elements.RightMeter.Parts.APMeter.ShowBarBG == "true")
-					topLevel.RightMeters_mc.ActionPointMeter_mc.APBarFrame_mc.visible = true;
-					
-				if (xmlConfigHC.Elements.LeftMeter.HPLabelSide == "left")
-					topLevel.LeftMeters_mc.HPMeter_mc.DisplayText_mc.x = -45;
-				else if (xmlConfigHC.Elements.LeftMeter.HPLabelSide == "right")
-					topLevel.LeftMeters_mc.HPMeter_mc.DisplayText_mc.x = 325;
-					
-				if (xmlConfigHC.Elements.RightMeter.Parts.APMeter.APLabelSide == "left")
-					topLevel.RightMeters_mc.ActionPointMeter_mc.DisplayText_mc.x = -321;
-				else if (xmlConfigHC.Elements.RightMeter.Parts.APMeter.APLabelSide == "right")
-					topLevel.RightMeters_mc.ActionPointMeter_mc.DisplayText_mc.x = 43;
+				if (xmlConfigHC.Elements.RightMeter.Parts.FlashLightWidget.RestoreFlashLightIcon != undefined)
+				{
+					if (xmlConfigHC.Elements.RightMeter.Parts.FlashLightWidget.RestoreFlashLightIcon == "true")
+					{
+						FlashLightRestored_mc.visible = true;
+					}
+					else if (xmlConfigHC.Elements.RightMeter.Parts.FlashLightWidget.RestoreFlashLightIcon == "false")
+					{
+						FlashLightRestored_mc.visible = false;
+					}
+				}
 				
 				if (xmlConfigHC.Colors.HUD.CustomCrosshair == "true")
 				{
@@ -1837,7 +1974,7 @@ package
 				topLevel.BottomCenterGroup_mc.CritMeter_mc.filters = [bottomcenterColorMatrix];
 				
 				
-				topLevel.TopRightGroup_mc.QuestTracker.filters = [trackerColorMatrix];
+				topLevel.TopRightGroup_mc.NewQuestTracker_mc.filters = [trackerColorMatrix];
 				
 				topLevel.HUDNotificationsGroup_mc.Messages_mc.filters = [notiColorMatrix];
 				topLevel.HUDNotificationsGroup_mc.XPMeter_mc.filters = [notiColorMatrix];
@@ -1908,25 +2045,25 @@ package
 
 		}
 		
-		function frame1() : *
+		private function frame1() : *
 		{
 			stop();
 			HUDNotification_mc.visible = false;
 		}
 
-		function frame2() : *
+		private function frame2() : *
 		{
 			stop();
 			HUDNotification_mc.visible = true;
 		}
 		
 
-		function frame3() : *
+		private function frame3() : *
 		{
 			stop();
 		}
 		
-		function frame4() : *
+		private function frame4() : *
 		{
 			stop();
 			HUDNotification_mc.visible = false;
@@ -1943,6 +2080,43 @@ package
 			{
 				topLevel.HUDNotificationsGroup_mc.XPMeter_mc.gotoAndStop("xp");
 				topLevel.HUDNotificationsGroup_mc.XPMeter_mc.NumberText.visible = true;
+			}
+		}
+		
+		private function ShowHealth(param1:int):*
+		{
+			var isEnemy:Boolean = false;
+			var healthPercent:Number  = NaN;
+			showHealthText.visible = true;
+			if (xmlConfigHC.Elements.EnemyHealthMeter.ShowHealthPercent == "true")
+			{
+				isEnemy = false;
+				if (topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.currentFrame < 5)
+				{
+					isEnemy = true;
+				}
+				else if (topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.currentFrame > 5)
+				{
+					isEnemy = false;
+				}
+				healthPercent = !!isEnemy ? Number(topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.MeterBarEnemy_mc.Percent) : Number(topLevel.TopCenterGroup_mc.EnemyHealthMeter_mc.MeterBar_mc.Percent);
+				if (param1 > 0)
+				{
+					showHealthText.text = "[" + Math.round(param1 * healthPercent).toString() + " - " + (healthPercent * 100).toFixed(2).toString() + "%]";
+				}
+				else
+				{
+					showHealthText.text = "[" + (healthPercent * 100).toFixed(2).toString() + "%]";
+				}
+				showHealthText.textColor = !!isEnemy ? uint(16741472) : uint(16777163);
+			}
+			else if (xmlConfigHC.Elements.EnemyHealthMeter.ShowHealthPercent == "false")
+			{
+				showHealthText.visible = false;
+			}
+			else if (xmlConfigHC.Elements.EnemyHealthMeter.ShowHealthPercent == undefined)
+			{
+				showHealthText.visible = false;
 			}
 		}
 	}
